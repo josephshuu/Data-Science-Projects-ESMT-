@@ -1,0 +1,761 @@
+---
+title: "Predicting Oscar Best Picture 2020"
+author: "Joseph Shu, Jimena Rey, Georg Heimann, Ruby Zhou"
+date: "1-2-2020"
+
+---
+
+### Load Packages 
+```{r setup, include=FALSE}
+library(xml2)
+library(rvest)
+library(stringr)
+library(dplyr)
+library(tidyverse)
+library(openxlsx)
+library(magrittr)
+library(ggpubr)
+library(tm)
+```
+
+
+```{r, message = F, warning = F}
+#Specifying the url for desired website to be scrapped
+url <- "https://en.wikipedia.org/wiki/Academy_Award_for_Best_Picture"
+
+#Reading the html content and scrape data
+webpage <- read_html(url)
+table_html <- html_nodes(webpage, ".wikitable")
+table <- html_table(table_html, fill = TRUE)
+
+df <- table[[1]]
+
+### bind rows to df
+
+for ( i in 2:10){
+  
+  colnames(table[[i]]) <- c("Year", "Film", "Film Studio") 
+  df <- rbind(df,table[[i]])
+  
+}
+### delete NA rows
+df <- df[ !is.na( df[,2] ) , ]
+
+### winner is first row of each year
+
+
+links <- tibble( 
+  webpage %>%
+    html_nodes(".wikitable") %>% html_nodes("i") %>% html_nodes("a") %>% 
+    html_attr("href")
+)
+matchname <- tibble (
+       webpage %>%
+       html_nodes(".wikitable") %>% html_nodes("i") %>% html_nodes("a") %>% 
+       html_text("href")
+)
+
+links_df <- data.frame(links,matchname)
+
+colnames(links_df) <- c("Link","Filmcheck")
+
+data <- data.frame(df, links_df)
+
+## check if scraping worked
+data$Film==data$Filmcheck
+data <- data %>% select(-Filmcheck)
+
+data$Link2 <- paste0("https://en.wikipedia.org",data$Link )
+
+movielist <- data$Link2
+IMDBlist <- list()
+
+for (i in 1:length(movielist)){
+  
+   list <- read_html(movielist[i]) %>% html_nodes("ul li") %>% 
+    html_nodes("a") %>% html_attr("href")
+
+ IMDBlist[i]= list[grep('imdb', list)]
+}
+
+data2 <- data.frame(data, IMDBlink=unlist(IMDBlist))
+### now we have all the imdb links to scrape the data
+### unfortunately some mistakes occured that have to be changed manually
+
+####changing mistakes
+data2$IMDBlink<- as.character(data2$IMDBlink)
+data2[data2$Link=="/wiki/Lincoln_(film)","IMDBlink"]<- "https://www.imdb.com/title/tt0443272/"
+data2[data2$Link=="/wiki/Mr._Deeds_Goes_to_Town","IMDBlink"]<- "https://www.imdb.com/title/tt0027996/"
+data2[data2$Link=="/wiki/Elizabeth_(film)","IMDBlink"]<- "https://www.imdb.com/title/tt0127536/"
+data2[data2$Link=="/wiki/A_Room_with_a_View_(1985_film)","IMDBlink"]<- "https://www.imdb.com/title/tt0091867/"
+data2[data2$Link=="/wiki/Going_My_Way","IMDBlink"]<- "https://www.imdb.com/title/tt0443272/"
+data2[data2$Link=="/wiki/Three_Coins_in_the_Fountain_(film)","IMDBlink"]<- "https://www.imdb.com/title/tt0047580/"
+data2[data2$Link=="/wiki/One_Hundred_Men_and_a_Girl","IMDBlink"]<- "https://www.imdb.com/title/tt0029347/"
+data2[data2$Link=="/wiki/One_Hundred_Men_and_a_Girl","IMDBlink"]<- "https://www.imdb.com/title/tt0029347/"
+data2[data2$Link=="/wiki/Casablanca_(film)","IMDBlink"]<- "https://www.imdb.com/title/tt0034583/"
+```
+
+
+```{r}
+###scrape rating and time
+###takes around 15 min
+
+IMDBsites <- data2$IMDBlink
+IMDBrating <- list()
+IMDBtime <- list()
+
+i=1
+while (i <= length(IMDBsites)){
+  x= print(read_html(IMDBsites[i]) %>% html_nodes(".ratingValue") %>% html_text() %>% gsub("\n","",.))
+  if ( identical(x, character(0)) ) {x <- NA}
+  IMDBrating[i]<- x
+  
+  y= print((read_html(IMDBsites[i]) %>% html_nodes("time") %>% html_text())[1] %>% gsub("\n ","",.))
+  if ( identical(x, character(0)) ) {x <- NA}
+  IMDBtime[i]<- y
+  
+  i=i+1
+}
+data2 <- data.frame(data2, IMDBrating=unlist(IMDBrating), Time=unlist(IMDBtime))
+data2$Time <- data2$Time %>% str_replace_all(pattern=" ",replacement = "")
+```
+
+```{r}
+### scrape Genre
+
+IMDBGenre1 <-list()
+IMDBGenre2 <-list()
+IMDBGenre3 <- list()
+IMDBGenre4 <-list()
+i=1
+while (i <= length(IMDBsites)){
+  x= read_html(IMDBsites[i]) %>% html_nodes(".subtext a") %>% html_text()
+  if ( identical(x, character(0)) ) {x <- NA}
+  IMDBGenre1[i]=print(x[1])
+  IMDBGenre2[i]=print(x[2])
+  IMDBGenre3[i]=print(x[3])
+  IMDBGenre4[i]=print(x[4])
+i=i+1
+}
+Genre.data <- data.frame(G1=unlist(IMDBGenre1),G2=unlist(IMDBGenre2),G3=unlist(IMDBGenre3),G4=unlist(IMDBGenre4))
+Genre.data$Release <- as.character(NA)
+Genre.data$G2 <- as.character(Genre.data$G2)
+Genre.data$G3 <- as.character(Genre.data$G3)
+Genre.data$G4 <- as.character(Genre.data$G4)
+Genre.data$G1 <- as.character(Genre.data$G1)
+
+Genre.data[which(str_detect(Genre.data$G2,pattern="[1-9]")==TRUE),"Release"] <-
+  Genre.data[which(str_detect(Genre.data$G2,pattern="[1-9]")==TRUE),"G2"]
+Genre.data[which(str_detect(Genre.data$G2,pattern="[1-9]")==TRUE),"G2"] <- NA
+
+Genre.data[which(str_detect(Genre.data$G3,pattern="[1-9]")==TRUE),"Release"] <-
+  Genre.data[which(str_detect(Genre.data$G3,pattern="[1-9]")==TRUE),"G3"]
+Genre.data[which(str_detect(Genre.data$G3,pattern="[1-9]")==TRUE),"G3"] <- NA
+
+Genre.data[which(str_detect(Genre.data$G4,pattern="[1-9]")==TRUE),"Release"] <-
+  Genre.data[which(str_detect(Genre.data$G4,pattern="[1-9]")==TRUE),"G4"]
+Genre.data[which(str_detect(Genre.data$G4,pattern="[1-9]")==TRUE),"G4"] <- NA
+
+data2 <- data.frame(data2, Genre1=Genre.data$G1, Genre2=Genre.data$G2, Genre3=Genre.data$G3)
+```
+
+```{r}
+### Winner is first row of each year
+winnerlist <- list()
+b <- c( as.character(data2$Year))
+for( a in 1:562){winnerlist[a]=(b[a]!=data2$Year[a+1])}
+winnerlist <- c(TRUE, unlist(winnerlist)) %>% as.numeric()
+data2$winner <- winnerlist
+data2[555,"winner"]<-0
+```
+```{r}
+### scrape number of votes and budget
+IMDBvotes <- list()
+
+i=1
+while (i <= length(IMDBsites)){
+  x= (read_html(IMDBsites[i]) %>% html_nodes(".small")%>% html_text("span"))[2]
+  if ( identical(x, character(0)) ) {x <- NA}
+  IMDBvotes[i]<- x
+  
+  i=i+1
+}
+
+data2$Votes <- unlist(IMDBvotes)
+data2[8,"Votes"]<- NA
+
+
+#### budget
+IMDBbudget <- list()
+
+data2$Votes <- IMDBvotes
+i=1
+while (i <= length(IMDBsites)){
+  x= (read_html(IMDBsites[i]) %>% html_nodes("#titleDetails")%>%  html_text())
+  if ( identical(x, character(0)) ) {x <- NA}
+  x1 <- sub(".*Budget:", "", x)
+  x1 <- sub("\\n.*","",x1)
+  IMDBbudget[i]<- print(x1)
+  
+  i=i+1
+}
+
+data2$Budget <- unlist(IMDBbudget)
+```
+
+```{r}
+### rotten tomatoes link
+rottenlist <- list()
+
+for (i in 1:length(movielist)){
+  
+  x <- read_html(movielist[i]) %>% html_nodes("ul li") %>% 
+    html_nodes("a") %>% html_attr("href")
+  x <-print(x[grep('rotten', x)])
+  if ( identical(x, character(0)) ) {x <- NA}
+  rottenlist[i]= x
+}
+
+data2$rottenlink <- unlist(rottenlist)
+
+
+
+###rotten tomatoes rating
+rottenrating1 <-list()
+rottenrating2 <-list()
+i=1
+```
+
+```{r}
+### This chunk has to be executed until no error occurs anymore
+
+while (i <= length(rottenlist)){
+  
+  if (is.na(rottenlist[i])){
+    rottenrating1[i]<- NA
+    rottenrating2[i]<- NA
+  }else
+  {
+    
+    x= (read_html(rottenlist[[i]]) %>% html_nodes("#tomato_meter_link .mop-ratings-wrap__percentage")%>%  html_text())
+    if ( identical(x, character(0)) ) {x <- NA}
+    x <- gsub("[^0-9.]", "",  x)
+    rottenrating1[i]<- print(x)
+    
+    x2= (read_html(rottenlist[[i]]) %>% html_nodes(".audience-score .mop-ratings-wrap__percentage")%>%  html_text())
+    if ( identical(x, character(0)) ) {x2 <- NA}
+    x2 <- gsub("[^0-9.]", "",  x2)
+    rottenrating2[i]<- print(x2)
+    
+  }
+  i=i+1
+}
+### 4 errors come... do this 3 steps and start loop again
+rottenrating1[i]<- NA
+rottenrating2[i]<- NA
+i=i+1
+
+```
+
+```{r}
+data2$tomatometer <- unlist(rottenrating1)
+data2$audiencescore <- unlist(rottenrating2)
+
+### write xlsx not clean
+#write.xlsx(data2, "data.xlsx")
+```
+
+### Cleaning Data
+```{r}
+# year
+data2$Year <-sub("\\(.*","",data2$Year)
+data2$Year <- sub("\\/.*","",data2$Year)
+
+# imdb rating
+data2$IMDBrating <-sub("\\/.*","",data2$IMDBrating)
+
+#time
+data2$Time <- sapply(str_extract_all(data2$Time, "\\d+"), function(x) {
+  x1 <- as.numeric(x)
+  if(length(x1)>1) x1[1]*60 + x1[2] else x1*60 })
+### Casablanca is wrong
+
+# Votes
+data2$Votes <- as.numeric(gsub(",", "", data2$Votes))
+
+data2$Year <- data2$Year %>% as.numeric
+data2$IMDBrating <- as.numeric(data2$IMDBrating)
+data2$tomatometer <- as.numeric(data2$tomatometer)
+data2$audiencescore <- as.numeric(data2$audiencescore)
+
+
+nominee <- data2
+```
+
+
+```{r}
+# Budget
+nominee$Currency <-nominee$Budget
+nominee$Currency <- removeNumbers(nominee$Currency)
+nominee$Currency <- gsub(",","",nominee$Currency)
+nominee$Budget <- parse_number(nominee$Budget)
+#Convert GBP and EUR to USD - convertion rates gathered from various websites
+Y1933 <- nominee %>% 
+  filter(Currency == "GBP", Year == 1933) %>% 
+  mutate(Budget=Budget/0.24)
+Y1938 <- nominee %>% 
+  filter(Currency == "GBP", Year == 1938) %>% 
+  mutate(Budget=Budget/0.2)
+Y1942_48 <- nominee %>% 
+  filter(Currency == "GBP", Year %in% c(1942, 1943, 1946, 1947,1948)) %>% 
+  mutate(Budget=Budget/0.2525)
+Y1959 <- nominee %>% 
+  filter(Currency == "GBP", Year == 1959) %>% 
+  mutate(Budget=Budget/0.3508)
+Y1965 <- nominee %>% 
+  filter(Currency == "GBP", Year == 1965) %>% 
+  mutate(Budget=Budget/0.3517)
+Y1983_87 <- nominee %>% 
+  filter(Currency == "GBP", Year %in% c(1983,1987)) %>% 
+  mutate(Budget=Budget/0.4303)
+Y1989 <- nominee %>% 
+  filter(Currency == "GBP", Year == 1989) %>% 
+  mutate(Budget=Budget/0.6392)
+Y1992 <- nominee %>% 
+  filter(Currency == "GBP", Year == 1992) %>% 
+  mutate(Budget=Budget/0.6015)
+Y2006 <- nominee %>% 
+  filter(Currency == "GBP", Year == 2006) %>% 
+  mutate(Budget=Budget*1.84)
+Y2017 <- nominee %>%
+  filter(Currency == "EUR") %>%
+  mutate(Budget=Budget*1.13)
+
+GbpEurYears <- rbind(Y1933,Y1938,Y1942_48,Y1959,Y1965,Y1983_87,Y1989,Y1992,Y2006, Y2017)
+GbpEurYears$Currency <- sub("GBP", "$", GbpEurYears$Currency)
+GbpEurYears$Currency <- sub("EUR", "$", GbpEurYears$Currency)
+
+#Merging GBPYears to nominee and deleting duplicates with GBP and EUR values. Since now all budget values are in USD, will delete Currency column
+nominee <- rbind(nominee,GbpEurYears)
+nominee <- nominee[!(nominee$Currency %in% c("GBP","EUR")),]
+nominee <- select(nominee, -"Currency")
+```
+
+
+```{r}
+# Read html table
+url <- "https://inflationdata.com/Inflation/Consumer_Price_Index/HistoricalCPI.aspx?reloaded=true"
+webpage <- read_html(url)
+USinflation <- html_table(webpage, fill = TRUE)
+USinflation <- USinflation[[1]]
+USinflation <- USinflation %>% select(Year , Ave.)
+# Rename column for clarity
+names(USinflation)[names(USinflation) == "Ave."] <- "InflationR"
+# View resulting dataframe
+head(USinflation)
+```
+
+```{r}
+#Adjust Budget to today's values
+nominee <- merge(nominee, USinflation, by = "Year" )
+AdjustedBudget <- with(nominee, Budget*(255.657/InflationR))
+nominee <- cbind(nominee, AdjustedBudget)
+nominee <- select(nominee, -c("InflationR","Budget"))
+```
+
+```{r}
+# Dealing with missing values
+NAcols <- colnames(nominee)[colSums(is.na(nominee)) > 0]
+sort(colSums(sapply(nominee[NAcols], is.na)))
+```
+
+```{r}
+#Votes
+nominee$Votes[is.na(nominee$Votes)] <- mean(nominee$Votes[!is.na(nominee$Votes)])
+nominee$IMDBrating[is.na(nominee$IMDBrating)] <- mean(nominee$IMDBrating[!is.na(nominee$IMDBrating)])
+
+```
+
+```{r}
+# AdjustedBudget - ratio imputation
+model3 <- lm(AdjustedBudget ~ IMDBrating + Votes, data = nominee)
+summary(model3)
+NAadjustedbudget <- is.na(nominee$AdjustedBudget)
+nominee$AdjustedBudget[NAadjustedbudget] <- predict(model3, newdata = nominee[NAadjustedbudget, ])
+```
+
+```{r}
+# tomatometer - ratio imputation
+model4 <- lm(tomatometer ~ IMDBrating + Time + Votes, data = nominee)
+summary(model4)
+NAtomatometer <- is.na(nominee$tomatometer)
+nominee$tomatometer[NAtomatometer] <- predict(model4, newdata = nominee[NAtomatometer, ])
+
+nominee <- select(nominee, -rottenlink)
+```
+
+```{r}
+#AudienceScore
+model5 <-lm(audiencescore ~ tomatometer + IMDBrating + Votes, data = nominee)
+summary(model5)
+NAaudience <- is.na(nominee$audiencescore)
+nominee$audiencescore[NAaudience] <- predict(model5, newdata = nominee[NAaudience, ])
+
+### write.xlsx(nominee,"dataclean 01.02.20.xlsx")
+nominee <- read_excel("dataclean 01.02.20.xlsx")
+```
+
+### Data Visulisation
+```{r}
+### Genre
+nominee$Year <- as.numeric(nominee$Year)
+
+G1 <-nominee %>%  group_by(Genre1) %>% summarise(n=n())
+G2 <-nominee %>%  group_by(Genre2) %>% summarise(n=n()) %>% rename(Genre1="Genre2")
+G3 <-nominee %>%  group_by(Genre3) %>% summarise(n=n()) %>% rename(Genre1="Genre3")
+G <- rbind(G1,G2,G3) %>% group_by(Genre1) %>% summarise(sum=sum(n))
+
+## junst winner genre
+datawinner <- nominee %>% filter(winner==1)
+G1winner <-datawinner %>%  group_by(Genre1) %>% summarise(n=n())
+G2winner <-datawinner %>%  group_by(Genre2) %>% summarise(n=n()) %>% rename(Genre1="Genre2")
+G3winner <-datawinner %>%  group_by(Genre3) %>% summarise(n=n()) %>% rename(Genre1="Genre3")
+Gwinner <- rbind(G1winner,G2winner,G3winner) %>% group_by(Genre1) %>% summarise(sum=sum(n))
+
+G <- data.frame(Genre =c(nominee$Genre1,nominee$Genre2,nominee$Genre3),Winner=as.factor(c(nominee$winner,nominee$winner,nominee$winner)),Year=c(nominee$Year,nominee$Year,nominee$Year)) %>% na.omit()
+
+###dist genre
+ggplot(G, aes(reorder(Genre,Genre,function(x)-length(x)),fill=Winner)) + 
+  geom_bar()+labs(title="Nominations by Genre",
+        x ="Genre", y = "n")+
+  theme(axis.text.x = element_text(face="bold", color="#993333", size=14),
+        axis.text.y = element_text(face="bold", color="#993333", size=14))+coord_flip()
+
+```
+
+```{r}
+### make new categories that make sense
+nominee$Crime <- 0
+nominee[which(nominee$Genre1=="Crime"),"Crime"]<-1
+nominee[which(nominee$Genre1=="Thriller"),"Crime"]<-1
+nominee[which(nominee$Genre1=="Film-Noir"),"Crime"]<-1
+nominee[which(nominee$Genre2=="Crime"),"Crime"]<-1
+nominee[which(nominee$Genre2=="Thriller"),"Crime"]<-1
+nominee[which(nominee$Genre2=="Film-Noir"),"Crime"]<-1
+nominee[which(nominee$Genre3=="Crime"),"Crime"]<-1
+nominee[which(nominee$Genre3=="Thriller"),"Crime"]<-1
+nominee[which(nominee$Genre3=="Film-Noir"),"Crime"]<-1
+
+nominee$Romance <- 0
+nominee[which(nominee$Genre1=="Romance"),"Romance"]<-1
+nominee[which(nominee$Genre2=="Romance"),"Romance"]<-1
+nominee[which(nominee$Genre3=="Romance"),"Romance"]<-1
+
+nominee$Action <- 0
+nominee[which(nominee$Genre1=="Action"),"Action"]<-1
+nominee[which(nominee$Genre1=="Adventure"),"Action"]<-1
+nominee[which(nominee$Genre1=="War"),"Action"]<-1
+nominee[which(nominee$Genre1=="Sci-Fi"),"Action"]<-1
+nominee[which(nominee$Genre2=="Action"),"Action"]<-1
+nominee[which(nominee$Genre2=="Adventure"),"Action"]<-1
+nominee[which(nominee$Genre2=="War"),"Action"]<-1
+nominee[which(nominee$Genre2=="Sci-Fi"),"Action"]<-1
+nominee[which(nominee$Genre3=="Action"),"Action"]<-1
+nominee[which(nominee$Genre3=="Adventure"),"Action"]<-1
+nominee[which(nominee$Genre3=="War"),"Action"]<-1
+nominee[which(nominee$Genre3=="Sci-Fi"),"Action"]<-1
+
+nominee$History <- 0
+nominee[which(nominee$Genre1=="Biography"),"History"]<-1
+nominee[which(nominee$Genre1=="Documentary"),"History"]<-1
+nominee[which(nominee$Genre1=="History"),"History"]<-1
+nominee[which(nominee$Genre1=="Music"),"History"]<-1
+nominee[which(nominee$Genre2=="Biography"),"History"]<-1
+nominee[which(nominee$Genre2=="Documentary"),"History"]<-1
+nominee[which(nominee$Genre2=="History"),"History"]<-1
+nominee[which(nominee$Genre2=="Music"),"History"]<-1
+nominee[which(nominee$Genre3=="Biography"),"History"]<-1
+nominee[which(nominee$Genre3=="Documentary"),"History"]<-1
+nominee[which(nominee$Genre3=="History"),"History"]<-1
+nominee[which(nominee$Genre3=="Music"),"History"]<-1
+
+nominee$Comedy <- 0
+nominee[which(nominee$Genre1=="Comedy"),"Comedy"]<-1
+nominee[which(nominee$Genre2=="Comedy"),"Comedy"]<-1
+nominee[which(nominee$Genre3=="Comedy"),"Comedy"]<-1
+
+nominee <- nominee %>% select(-c("Genre1","Genre2","Genre3","Film.Studio"))
+```
+
+```{r}
+hist(nominee$Time)
+hist(nominee$IMDBrating)
+hist(nominee$Votes) ### votes are screw
+hist(nominee$AdjustedBudget)
+### one outlier
+boxplot.stats(nominee$AdjustedBudget) ###replace outlier with extreme of the upper ‘hinge’
+nominee[nominee$Film=="Going My Way","AdjustedBudget"]=nominee[(nominee$Film=="Cleopatra"&nominee$Year==1963),"AdjustedBudget"]
+
+### Give the movie also the second highest value to keep it expensive 
+```
+
+We start by looking at the summary statistics to give us an idea of what the dataset looks like
+```{r}
+#View summary statistics for all variables
+summary(nominee)
+```
+
+We then plot a correlation matrix of the numeric variables
+```{r, message = F, warning =F}
+# View correlation between numeric variables of our dataset
+ggpairs(nominee[ , c("winner","IMDBrating","Time","Votes","tomatometer","audiencescore","AdjustedBudget")])
+```
+From the matrix above we can see the only two variables that have a high correlation are audience score and IMDB rating, this is not too surprising since both these ratings are determined by normal viewers. Another variable that scores movies is tomatometer, message = F, warning =F which refers to movie critics. It is interesting to see this rating is not too closely correlated with either audience score nor the IMDB rating.
+
+```{r, message = F, warning =F }
+#Historical progression of movie budgets
+ggplot(nominee) +
+  geom_point(aes(Year, AdjustedBudget, colour = as.factor(winner))) +
+  geom_smooth(aes(Year, AdjustedBudget))+
+  theme_minimal() +
+  labs(title = "Did movies get more expensive over time?", y = "Budget", colour = "Winner")
+```
+There is a trend for higher and higher budgets as years pass by. We also notice in the 2000s those movies with very large budgets do not seem to be more likely to win oscars for the most part.
+
+```{r, message = F}
+# Historical progression of movie length in minutes
+ggplot(nominee) +
+  geom_point(aes(Year, Time, colour = as.factor(winner))) +
+  geom_smooth(aes(Year, Time))+
+  theme_minimal() +
+  labs(title = "Did movies get  longer over time?", y = "Movie Time in minutes", colour = "Winner")
+```
+As evident from the trend line, the movies are getting longer in general, although they seem to have plateaued after the 1950s. However, we observe more outliers between 1928 and 1975 than between 1975 and 2019. We also see that ever since around 2020 those movies which are much longer than the average seem to rarely win the Oscar for best picture.
+
+```{r, message = F, warning =F}
+#Relationship between movie length and budget
+ggplot(nominee, aes(Time, AdjustedBudget)) +
+  geom_point() +
+  geom_smooth()+
+  theme_minimal() +
+  labs(title = "Are longer movies more expensive?", x="Movie Time in minutes", y="Budget")
+```
+Although the relationship is positive it is not very strong, this indicates that longer movies were not necessarily more expensive to produce. 
+
+```{r, message = F, warning =F}
+# Realtionship between IMDB votes and award-winning movies
+ggplot(nominee, aes(x=winner, y=Votes, color = as.factor(winner))) + 
+  geom_boxplot(nominee.colour="red", nominee.shape=8, nominee.size=4) +
+  theme_minimal() + 
+ labs(title = "Did the winning movies get a more votes on IMDB?", x="Did the movie win?", colour = "Winner")
+
+```
+On average winning moves have higher number of votes on IMDB and less nominees than lose than lost. We need to bare in mind that this voting numbers are up to the date the data was scrapped. So it is possible after being nominated more people watched the movie and voted, thus skewing our results. This graph made us wonder about the relationship between votes and IMDB ratings, so we will analyse this next.
+
+```{r, message = F, warning =F}
+#Relationship between IMDB rating and votes
+ggplot(nominee) +
+  geom_point(aes(IMDBrating, Votes, colour = as.factor(winner))) +
+  geom_smooth(aes(IMDBrating, Votes))+
+  theme_minimal() +
+  labs(title = "Do highest rated movies have more votes?", colour = "Winner")
+```
+The graph above shows there is definitely a positive relationship between highest rated movies and votes. We can also see an nominee at the top right, which had a very high rating and many votes, yet it did not win an Oscar. It is noteworthy that where the bulk of the movies are - rated between 7 and 8 - the regression line is almost horizonal indicating a neutral relationship.
+
+```{r, message = F, warning = F}
+#Relationship between movie length and IMDB rating
+ggplot(nominee) + 
+  geom_jitter(aes(IMDBrating, Time, colour = as.factor(winner))) +
+  geom_smooth(aes(IMDBrating, Time, colour = winner)) + 
+  theme_minimal() +
+  labs(title = "Do longer movies get better IMDB ratings?", y = "Movie Lenght", colour = "Winner")
+```
+The trend line indicates that longer movies do receive better IMDB ratings. However, for where the bulk of the movies are - rated between 7 and 8 - the trend line is almost horizontal meaning the realtionship is not so positive for this average ratings. On the top right corner of the graph is also interesting to see that very long movies with very high ratings also won the Oscars. 
+
+```{r, message = F, warning =F}
+#Relationship winning movies and Rotten Tomatoes audience score
+ggplot(nominee, aes(x=as.factor(winner), y=audiencescore, colour = as.factor(winner))) + 
+  geom_boxplot(nominee.colour="red", nominee.shape=8,nominee.size=4) +
+ labs(title = "Did the winning movies get a higher Audience Score?", x = "Did the movie win?", colour = "Winner")
+
+```
+Although the average audience score for winning movies is higher, message = F, warning =F the difference is not that large. The outliers of winning movies are also more spread out. Seems like audience scores are not so good at predicting winning movies on their own.
+
+```{r, message = F, warning =F }
+#Genre groupings and audience scores
+#Romance
+ggplot(nominee, aes(x=Romance, y=audiencescore, color = Romance, group = Romance)) + 
+  geom_boxplot(nominee.colour="blue", nominee.shape=8,nominee.size=4) +
+  theme_minimal() + 
+  theme(legend.position = "none") +
+ labs(title = "Did Romance movies get a higher Audience Score?")
+
+#Action
+ggplot(nominee, aes(x=Action, y=audiencescore, color = Action, group = Action)) + 
+  geom_boxplot(nominee.colour="blue", nominee.shape=8,nominee.size=4) +
+  theme_minimal() + 
+  theme(legend.position = "none") +
+   labs(title = "Did Action movie get a higher Audience Score?")
+
+#Crime
+ggplot(nominee, aes(x=Crime, y=audiencescore, color = Crime, group = Crime)) + 
+  geom_boxplot(nominee.colour="blue", nominee.shape=8, nominee.size=4)+
+  theme_minimal() + 
+  theme(legend.position = "none") +
+  labs(title = "Did Crime movies get a higher Audience Score?")
+
+#History
+ggplot(nominee, aes(x=History, y=audiencescore, color = History, group = History)) + 
+  geom_boxplot(nominee.colour="blue", nominee.shape=8,nominee.size=4) +
+  theme_minimal() + 
+  theme(legend.position = "none") +
+    labs(title = "Did History movies get a higher Audience Score?")
+
+#Comedy
+ggplot(nominee, aes(x=Comedy, y=audiencescore, color = Comedy, group = Comedy)) + 
+  geom_boxplot(nominee.colour="blue", nominee.shape=8,nominee.size=4) +
+  theme_minimal() + 
+  theme(legend.position = "none") +
+    labs(title = "Did Comedy movies get a higher Audience Score?")
+
+```
+The first graph seems to indicate the audiences and the Academy Awards have different preferences when it comes to romantic movies, with the audience scoring higher those movies which did not end up winning an award. In regards to action movies, it seems like the audience enjoys them regardless of whether they ended up winning an award or not. Although we also see there are significantly more outliers for the action movies which did not win. For crime movies, the audiences seems to have a good feel of which movies will win, since these have higher average ratings and less deviation. For history the scores are pretty similar as well as the spread for both winning and losing movies, althouh losing ones have pretty distant outliers. Finally, for comedy movies both categories have similar average scores but winning movies have a larger deviation and no outliers. 
+Since we saw in the correlation matrix that IMDBratings and audiencescore are highly correlated, the trends observed for genres in IMDB ratings are the same for the most part.
+
+
+```{r, message=F, warning=F}
+#Genre groupings and critics tomato meter
+#Romance
+ggplot(nominee, aes(x=Romance, y=tomatometer,color = Romance, group = Romance)) + 
+  geom_boxplot(nominee.colour="red", nominee.shape=8, nominee.size=4) +
+    theme_minimal() + 
+  theme(legend.position = "none") + 
+  labs(title = "Did Romance movies get a higher tomatometer score?")
+
+#Action
+ggplot(nominee, aes(x=Action, y=tomatometer,  color = Action, group = Action)) + 
+  geom_boxplot(nominee.colour="red", nominee.shape=8, nominee.size=4) +
+    theme_minimal() + 
+  theme(legend.position = "none") +
+  labs(title = "Did Action movies get a higher tomatometer score?")
+
+#Crime  
+ggplot(nominee, aes(x=Crime, y=tomatometer, color = Crime, group = Crime)) + 
+  geom_boxplot(nominee.colour="red", nominee.shape=8,nomminee.size=4) + 
+    theme_minimal() + 
+  theme(legend.position = "none") +
+  labs(title = "Did Crime movies get a higher tomatometer score?")
+
+#History
+ggplot(nominee, aes(x=History, y=tomatometer, color = History, group = History)) + 
+  geom_boxplot(nominee.colour="red", nominee.shape=8,nominee.size=4) + 
+    theme_minimal() + 
+  theme(legend.position = "none") +
+  labs(title = "Did History movies get a higher tomatometer score?")
+
+#Comedy
+ggplot(nominee, aes(x=Comedy, y=tomatometer, color = Comedy, group = Comedy)) + 
+  geom_boxplot(nominee.colour="red", nominee.shape=8,nominee.size=4) +
+    theme_minimal() + 
+  theme(legend.position = "none") +
+  labs(title = "Did Comedy movies get a higher tomatometer score?")
+
+
+```
+We are now looking at the third type of rating in our data set, that is the one by movie critics in rotten tomatoes, called the tomato meter. For romance movies we can see they score higher those which did not win and their scores have less deviation although far more outliers. For action movies the average scores are pretty similar but winning movies have a wider deviation. Regarding crime movies critics seem to be in agreement with the academy as to what makes a good crime movie, with a higher average score and much lower deviation with barely any outliers. History movies are interesting in the sense that although they have similar average secores they have a wider interquartile range and a lower minimum score. Finally, comedy movies have the same average scores, losing movies have a wider interquartile range as well as a lower minimum. For all five genre categories movies which did not win the Best Picture award have many more outliers than those which did win.
+
+
+```{r, message = F, warning =F}
+ggplot(nominee) +
+  geom_point(aes(IMDBrating, tomatometer, colour = as.factor(winner))) +
+  geom_smooth(aes(IMDBrating, tomatometer)) + 
+  theme_minimal() + 
+  labs(colour = "Winner", title = "Relationship between IMDB ratings and the Tomatometer")
+
+```
+In this graph, we can observe that for all the past winners, IMDBrating and tomatometer have a positive relationship, That said, winners who got higher ratings will usually get higher tomato meters.
+
+```{r}
+#Predictive power of IMDB rating, TomatoMeter and Audience Scores
+summary(lm(winner ~ IMDBrating + tomatometer + audiencescore, data = nominee))
+```
+In the model above we compared our three rating measures and interestingly we can see that tomatometer actually predicts worse than audiencescore and IMDB ratings, even though it is from professional critics. The best predictor is IMDBratings followed by audience score, while the tomato meter comes in last. Even then all three measures together can only explain 4% of the variability of the winning movies. 
+
+```{r}
+#Models
+nominee <- readRDS("nominee.Rds")
+
+data <- filter(nominee,Year!=2019) %>% select(-Film)
+prediction_data<- filter(nominee,Year==2019)
+
+# define train and test data
+set.seed(2)
+train.n <- sample(1:length(data$Year),300)
+train_df <- data[train.n,]
+test_df <- data[-train.n,]
+
+Win_ <- test_df$winner
+
+#Logit
+mylogit <- glm(winner ~., data = train_df, family = binomial)
+summary(mylogit)
+predicted = predict(mylogit, newdata=test_df, type="response")
+#cv_error <- cv.glm(train_df,predicted)
+summary(predicted)
+
+cv.glm(train_df, mylogit, K=3)$delta[1]
+
+logit_pred <- predicted
+logit_pred[logit_pred>0.35]=1
+logit_pred[logit_pred<0.35]=0
+
+table(logit_pred,Win_)
+
+predict(mylogit, newdata=prediction_data, type="response")
+### The joker would win after logit
+
+### probit
+myprobit <- glm(winner ~., data = train_df, family = binomial(link = "probit"))
+summary(myprobit)
+predicted2 = predict(myprobit, newdata=test_df, type="response")
+#cv_error <- cv.glm(train_df,predicted)
+summary(predicted2)
+cv.glm(train_df, myprobit, K=3)$delta[1]
+
+probit_pred <- predicted2
+probit_pred[probit_pred>0.35]=1
+probit_pred[probit_pred<0.35]=0
+
+table(probit_pred,Win_)
+
+predict(myprobit, newdata=prediction_data, type="response")
+### also number 5 Joker wins
+
+
+############################################ tree based
+
+tree_nominee <- tree(as.factor(winner)~.,data=data, subset = train.n)
+
+### cross validation for optimal pruning
+cv_nominee <- cv.tree(tree_nominee,FUN=prune.misclass)
+best_level <- which.min(cv_nominee$dev)
+
+prune_nominee <- prune.misclass(tree_nominee,best=best_level)
+
+tree_pred=predict(prune_nominee,test_df,type="class")
+table(tree_pred,Win_)
+
+predict(prune_nominee, newdata=prediction_data, type="class")
+
+############################################random forest
+
+randomforest_nominee <- randomForest(as.factor(winner)~.,data=data, subset = train.n, mtry=13,ntree=11)
+
+randomforest_pred=predict(randomforest_nominee,test_df,type="class")
+table(randomforest_pred,Win_)
+
+predict(randomforest_nominee, newdata=prediction_data, type="class")
+### also 5 wins but winner changes easily with changing the ntree
+#################################################
+```
+
